@@ -1,0 +1,19 @@
+2024-06-17 16:58:50,499 - INFO - Log this packet
+2024-06-17 17:00:50,798 - INFO - Sniffer stopped by user (Ctrl+C).
+2024-06-17 17:00:52,817 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,817 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,817 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,817 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - ERROR - Socket error: [Errno 9] Bad file descriptor
+2024-06-17 17:00:52,818 - INFO - Exiting sniffer...
+Socket error: [Errno 9] Bad file descriptor
+Socket error: [Errno 9] Bad file descriptor
+Socket error: [Errno 9] Bad file descriptor
+Socket error: [Errno 9] Bad file descriptor
+Socket error: [Errno 9] Bad file descriptor
+Exiting sniffer...
