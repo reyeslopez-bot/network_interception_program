@@ -4,15 +4,13 @@ import struct
 import logging
 from ctypes import *
 from logging.handlers import RotatingFileHandler
-from typing import Dict
 from time import time, sleep
-import random
 import threading
 import argparse
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG,  # Changed to DEBUG level
+    level=logging.DEBUG,
     filename="packet_sniffer.log",
     filemode="w",
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -110,7 +108,7 @@ parser.add_argument("--protocol", help="Specify protocol to capture", choices=['
 parser.add_argument("--src-ip", help="Filter by source IP")
 args = parser.parse_args()
 
-def packet_filter(ip_header):  # CHANGED: Added packet and ip_header as parameters
+def packet_filter(ip_header):  
     if args.protocol and ip_header.protocol_map[ip_header.protocol_num].lower() != args.protocol:
         return False
     if args.src_ip and ip_header.src_address != args.src_ip:
@@ -120,7 +118,7 @@ def packet_filter(ip_header):  # CHANGED: Added packet and ip_header as paramete
 def process_packet(raw_buffer):
     try:
         ip_header = IP(raw_buffer[:20])
-        if packet_filter(raw_buffer, ip_header):  # CHANGED: Added packet filter check
+        if packet_filter(ip_header):  
             if ip_header.protocol_num == 1:  # ICMP
                 icmp_header = raw_buffer[ip_header.ihl * 4 : ip_header.ihl * 4 + 4]
                 icmp_type, icmp_code, _, _ = struct.unpack("!BBHH", icmp_header)
@@ -141,20 +139,25 @@ def process_packet(raw_buffer):
     except Exception as e:
         logger.error(f"Error processing packet: {e}")
 
-def packet_capture_thread(sniffer, stop_event):  # CHANGED: Added stop_event parameter
-    while not stop_event.is_set():  # CHANGED: Check for stop event
+def packet_capture_thread(sniffer, stop_event):
+    while not stop_event.is_set():
         try:
             raw_buffer = sniffer.recvfrom(65565)[0]
-            process_packet(raw_buffer)  # CHANGED: Added process_packet call
+            ip_header = IP(raw_buffer[0:20])
+            if packet_filter(ip_header):
+                process_packet(raw_buffer)
         except socket.error as e:
-            if not stop_event.is_set():  # CHANGED: Check for stop event before logging error
-                logger.error(f"Socket error: {e}")
-            break
+            if stop_event.is_set():
+                break  # Exit loop if interrupted
+            logging.error(f"Socket error: {e}")
+            break  # Exit loop on socket error
         except KeyboardInterrupt:
-            break
+            break  # Exit loop on Ctrl+C
+
 
 def main():
     socket_protocol = socket.IPPROTO_IP if os.name == "nt" else socket.IPPROTO_ICMP
+    stop_event = threading.Event()  # Define stop_event
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket_protocol) as sniffer:
@@ -163,9 +166,7 @@ def main():
             if os.name == "nt":
                 sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
     
-            stop_event = threading.Event()  # CHANGED: Create stop event
-            
-            threads = []  # MOVED: Placed thread creation here
+            threads = []
             for _ in range(10):  # Adjust the number of threads as needed
                 thread = threading.Thread(target=packet_capture_thread, args=(sniffer, stop_event))
                 thread.daemon = True  # Allow the main thread to exit even if these are running
@@ -174,19 +175,20 @@ def main():
 
             try:
                 while True:
+                    sleep(1)  # Sleep for 1 second to allow threads to run
                     try:
                         raw_buffer, _ = sniffer.recvfrom(65565)
 
                         # Calculate IP Checksum
                         ip_header_len = (raw_buffer[0] & 0xF) * 4
                         ip_header_bytes = raw_buffer[:ip_header_len]
-                        calculated_checksum = checksum(ip_header_bytes)  # CHANGED: Correct checksum call
+                        calculated_checksum = checksum(ip_header_bytes)
                         ip_header = IP(raw_buffer[0:20])
                         stored_checksum = socket.ntohs(ip_header.sum)
 
                         if calculated_checksum != stored_checksum:
                             logging.warning("Invalid IP checksum. Dropping packet.")
-                            continue  # Now this line is active and will skip to the next packet
+                            continue  # Skip to the next packet
                             
                         if len(raw_buffer) >= ip_header.ihl * 4:
                             # Protocol-specific parsing (ICMP, TCP, UDP)
@@ -220,7 +222,7 @@ def main():
 
             except KeyboardInterrupt:
                 logger.info("Interrupted by user. Exiting...")
-                stop_event.set()  # CHANGED: Signal threads to stop
+                stop_event.set()  # Signal threads to stop
 
             for thread in threads:
                 thread.join()  # Wait for all threads to finish
