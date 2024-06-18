@@ -7,6 +7,7 @@ from logging.handlers import RotatingFileHandler
 from time import time, sleep
 import threading
 import argparse
+import signal
 
 # Configure logging
 logging.basicConfig(
@@ -98,11 +99,6 @@ class RateLimiter:
 
 rate_limiter = RateLimiter(100)  # Allow up to 100 logs per second
 
-if rate_limiter.allow():
-    logger.info("Log this packet")
-else:
-    logger.warning("Rate limit exceeded, dropping packet")
-
 parser = argparse.ArgumentParser(description="Network Packet Sniffer")
 parser.add_argument("--protocol", help="Specify protocol to capture", choices=['tcp', 'udp', 'icmp', 'arp'])
 parser.add_argument("--src-ip", help="Filter by source IP")
@@ -118,7 +114,17 @@ def packet_filter(ip_header):
 def process_packet(raw_buffer):
     try:
         ip_header = IP(raw_buffer[:20])
-        if packet_filter(ip_header):  
+        if packet_filter(ip_header):
+            # Calculate IP Checksum
+            ip_header_len = (raw_buffer[0] & 0xF) * 4
+            ip_header_bytes = raw_buffer[:ip_header_len]
+            calculated_checksum = checksum(ip_header_bytes)
+            stored_checksum = socket.ntohs(ip_header.sum)
+
+            if calculated_checksum != stored_checksum:
+                logger.warning("Invalid IP checksum. Dropping packet.")
+                return  # Skip processing this packet
+
             if ip_header.protocol_num == 1:  # ICMP
                 icmp_header = raw_buffer[ip_header.ihl * 4 : ip_header.ihl * 4 + 4]
                 icmp_type, icmp_code, _, _ = struct.unpack("!BBHH", icmp_header)
@@ -134,7 +140,10 @@ def process_packet(raw_buffer):
                 udp_header_unpacked = struct.unpack("!HHHH", udp_header)
                 src_port = udp_header_unpacked[0]
                 dst_port = udp_header_unpacked[1]
-                logger.info(f"Protocol: UDP {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
+                if src_port == 53 or dst_port == 53:
+                    logger.info(f"Protocol: DNS (UDP) {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
+                else:
+                    logger.info(f"Protocol: UDP {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
 
     except Exception as e:
         logger.error(f"Error processing packet: {e}")
@@ -149,15 +158,21 @@ def packet_capture_thread(sniffer, stop_event):
         except socket.error as e:
             if stop_event.is_set():
                 break  # Exit loop if interrupted
-            logging.error(f"Socket error: {e}")
+            logger.error(f"Socket error: {e}")
             break  # Exit loop on socket error
-        except KeyboardInterrupt:
-            break  # Exit loop on Ctrl+C
-
+        except Exception as e:
+            logger.error(f"Error in packet capture thread: {e}")
 
 def main():
     socket_protocol = socket.IPPROTO_IP if os.name == "nt" else socket.IPPROTO_ICMP
     stop_event = threading.Event()  # Define stop_event
+
+    def signal_handler(sig, frame):
+        logger.info("Signal received, stopping...")
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_RAW, socket_protocol) as sniffer:
@@ -174,51 +189,8 @@ def main():
                 threads.append(thread)
 
             try:
-                while True:
+                while not stop_event.is_set():
                     sleep(1)  # Sleep for 1 second to allow threads to run
-                    try:
-                        raw_buffer, _ = sniffer.recvfrom(65565)
-
-                        # Calculate IP Checksum
-                        ip_header_len = (raw_buffer[0] & 0xF) * 4
-                        ip_header_bytes = raw_buffer[:ip_header_len]
-                        calculated_checksum = checksum(ip_header_bytes)
-                        ip_header = IP(raw_buffer[0:20])
-                        stored_checksum = socket.ntohs(ip_header.sum)
-
-                        if calculated_checksum != stored_checksum:
-                            logging.warning("Invalid IP checksum. Dropping packet.")
-                            continue  # Skip to the next packet
-                            
-                        if len(raw_buffer) >= ip_header.ihl * 4:
-                            # Protocol-specific parsing (ICMP, TCP, UDP)
-                            if ip_header.protocol_num == 1:  # ICMP
-                                icmp_header = raw_buffer[ip_header.ihl * 4 : ip_header.ihl * 4 + 4]
-                                icmp_type, icmp_code, _, _ = struct.unpack("!BBHH", icmp_header)
-                                logging.info(f"Protocol: ICMP (type={icmp_type}, code={icmp_code}) {ip_header.src_address} -> {ip_header.dst_address}")
-                            elif ip_header.protocol_num == 6:  # TCP
-                                tcp_header = raw_buffer[ip_header.ihl * 4 : ip_header.ihl * 4 + 20]
-                                tcp_header_unpacked = struct.unpack("!HHLLBBHHH", tcp_header)
-                                src_port = tcp_header_unpacked[0]
-                                dst_port = tcp_header_unpacked[1]
-                                logging.info(f"Protocol: TCP {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
-                            elif ip_header.protocol_num == 17:  # UDP
-                                udp_header = raw_buffer[ip_header.ihl * 4 : ip_header.ihl * 4 + 8]
-                                udp_header_unpacked = struct.unpack("!HHHH", udp_header)
-                                src_port = udp_header_unpacked[0]
-                                dst_port = udp_header_unpacked[1]
-                                if src_port == 53 or dst_port == 53:
-                                    logging.info(f"Protocol: DNS (UDP) {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
-                                else:
-                                    logging.info(f"Protocol: UDP {ip_header.src_address}:{src_port} -> {ip_header.dst_address}:{dst_port}")
-
-                    except socket.error as e:
-                        logging.error(f"Socket error: {e}")
-                    except KeyboardInterrupt:
-                        logging.info("Sniffer stopped by user (Ctrl+C).")
-                        break
-                    except Exception as e:
-                        logging.error(f"General error: {e}")
 
             except KeyboardInterrupt:
                 logger.info("Interrupted by user. Exiting...")
@@ -228,10 +200,9 @@ def main():
                 thread.join()  # Wait for all threads to finish
 
     finally:
-        if os.name == "nt":
+        if os.name == "nt" and 'sniffer' in locals():
             sniffer.ioctl(socket.SIO_RCVALL, socket.RCVALL_OFF)
-        else:
-            logger.info("Exiting sniffer...")
+        logger.info("Exiting sniffer...")
 
 if __name__ == "__main__":
     main()
